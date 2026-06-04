@@ -202,7 +202,7 @@ namespace SleepDrives
             {
                 var names = string.Join(", ", newlyBusy.Select(NameForDiskId));
                 _trayIcon.ShowBalloonTip(4000, "SleepDrives",
-                    $"Still in use, so left enabled for now: {names}. SleepDrives will retry.",
+                    $"{names} still in use — SleepDrives will keep trying and disable it shortly.",
                     Forms.ToolTipIcon.Warning);
             }
 

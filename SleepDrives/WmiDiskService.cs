@@ -49,7 +49,7 @@ namespace SleepDrives
             return disks;
         }
 
-        public DriveOperationResult Disable(string diskId)
+        public DriveOperationResult Disable(string diskId, bool force)
         {
             if (string.IsNullOrEmpty(diskId)) return DriveOperationResult.NotFound;
 
@@ -81,11 +81,11 @@ namespace SleepDrives
                             return DriveOperationResult.NoChangeNeeded;
                         }
 
-                        var prepared = QuiesceVolumes(GetUInt32(mo, "Number"));
+                        var prepared = QuiesceVolumes(GetUInt32(mo, "Number"), force);
                         if (prepared != DriveOperationResult.Succeeded)
                         {
-                            // Busy or Failed: leave the disk online and let the
-                            // caller retry, rather than forcing a dismount.
+                            // Busy (clean path only) or Failed: leave the disk
+                            // online and let the caller retry.
                             return prepared;
                         }
 
@@ -143,15 +143,16 @@ namespace SleepDrives
         }
 
         /// <summary>
-        /// Flush and dismount every volume on the disk. Returns
+        /// Flush and dismount every volume on the disk. On the clean path
+        /// (<paramref name="force"/> false) it returns
         /// <see cref="DriveOperationResult.Busy"/> the moment a volume can't be
-        /// locked, so the disk is never offlined while in use.
+        /// locked; when forcing, volumes are dismounted regardless.
         /// </summary>
-        private DriveOperationResult QuiesceVolumes(uint diskNumber)
+        private DriveOperationResult QuiesceVolumes(uint diskNumber, bool force)
         {
             foreach (var volume in _dismounter.GetVolumesOnDisk(diskNumber))
             {
-                switch (_dismounter.TryDismountVolume(volume))
+                switch (_dismounter.TryDismountVolume(volume, force))
                 {
                     case VolumeDismounter.VolumeResult.Busy:
                         return DriveOperationResult.Busy;

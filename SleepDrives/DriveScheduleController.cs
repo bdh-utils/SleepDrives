@@ -32,10 +32,24 @@ namespace SleepDrives
 
         private readonly IDiskService _diskService;
 
+        // When a managed disk first needs disabling, we record the time here and
+        // keep retrying the clean dismount until ForceAfter has elapsed, at which
+        // point we force it so the drive always eventually goes offline.
+        private readonly Dictionary<string, DateTime> _disablePendingSince =
+            new(StringComparer.OrdinalIgnoreCase);
+
         public DriveScheduleController(IDiskService diskService)
         {
             _diskService = diskService ?? throw new ArgumentNullException(nameof(diskService));
         }
+
+        /// <summary>
+        /// How long to keep attempting a clean dismount of an in-use drive before
+        /// forcing it offline. Background services almost always hold a handle to
+        /// a mounted volume, so without this escalation a drive could wait
+        /// indefinitely. Defaults to two minutes.
+        /// </summary>
+        public TimeSpan ForceAfter { get; set; } = TimeSpan.FromMinutes(2);
 
         /// <summary>
         /// Whether the schedule is actively enforced. When false, <see cref="Apply"/>
@@ -65,6 +79,7 @@ namespace SleepDrives
         {
             if (!Enabled)
             {
+                _disablePendingSince.Clear();
                 return new ApplyResult(Enforced: false, ShouldDisable: false, DisksChanged: 0, NoBusyDisks);
             }
 
@@ -72,31 +87,72 @@ namespace SleepDrives
             int changed = 0;
             List<string>? busy = null;
 
+            // Track which disks still need disabling this pass so we can forget
+            // the pending timers for everything else.
+            var stillPending = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             foreach (var disk in _diskService.ListDisks())
             {
                 if (!disk.IsManageable) continue;
                 if (!ManagedDiskIds.Contains(disk.DiskId)) continue;
                 if (disk.IsOffline == shouldDisable) continue;
 
-                var result = shouldDisable
-                    ? _diskService.Disable(disk.DiskId)
-                    : _diskService.Enable(disk.DiskId);
+                if (!shouldDisable)
+                {
+                    if (_diskService.Enable(disk.DiskId) == DriveOperationResult.Succeeded)
+                    {
+                        changed++;
+                    }
+                    continue;
+                }
 
+                // The disk should be offline but isn't yet. Keep trying cleanly
+                // until the grace period lapses, then force it.
+                if (!_disablePendingSince.TryGetValue(disk.DiskId, out var since))
+                {
+                    since = localNow;
+                    _disablePendingSince[disk.DiskId] = since;
+                }
+                bool force = localNow - since >= ForceAfter;
+
+                var result = _diskService.Disable(disk.DiskId, force);
                 if (result == DriveOperationResult.Succeeded)
                 {
                     changed++;
                 }
                 else if (result == DriveOperationResult.Busy)
                 {
+                    stillPending.Add(disk.DiskId);
                     (busy ??= new List<string>()).Add(disk.DiskId);
                 }
+                else
+                {
+                    // Failed/NotFound/Protected: keep the timer ticking so a
+                    // transient failure still escalates to a forced attempt.
+                    stillPending.Add(disk.DiskId);
+                }
             }
+
+            PruneStalePendingTimers(stillPending);
 
             return new ApplyResult(
                 Enforced: true,
                 ShouldDisable: shouldDisable,
                 DisksChanged: changed,
                 busy is null ? NoBusyDisks : busy);
+        }
+
+        private void PruneStalePendingTimers(HashSet<string> stillPending)
+        {
+            if (_disablePendingSince.Count == 0) return;
+
+            foreach (var key in new List<string>(_disablePendingSince.Keys))
+            {
+                if (!stillPending.Contains(key))
+                {
+                    _disablePendingSince.Remove(key);
+                }
+            }
         }
     }
 }

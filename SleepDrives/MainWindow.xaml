@@ -177,7 +177,7 @@
             <CheckBox x:Name="EnforceCheck" Content="Enforce this schedule automatically"
                       Foreground="{StaticResource BrandText}" FontSize="14" FontWeight="SemiBold"
                       Checked="EnforceCheck_Changed" Unchecked="EnforceCheck_Changed"/>
-            <TextBlock Text="Drives are flushed and safely dismounted before being disabled. A drive that's still in use is left enabled and retried, so nothing is cut mid-write."
+            <TextBlock Text="Drives are flushed and dismounted before being disabled. If one is still in use, SleepDrives keeps trying cleanly for a couple of minutes, then forces it offline so it always disables."
                        Foreground="{StaticResource BrandMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,6,0,0"/>
         </StackPanel>
 

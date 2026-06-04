@@ -147,6 +147,52 @@ namespace SleepDrives.Tests
         }
 
         [Fact]
+        public void Apply_BusyDisk_IsForciblyDisabledAfterGracePeriod()
+        {
+            var fake = new FakeDiskService(TestDisk.Make("d1", offline: false));
+            fake.BusyDiskIds.Add("d1"); // never frees on its own
+            var controller = new DriveScheduleController(fake)
+            {
+                Enabled = true,
+                ForceAfter = TimeSpan.FromMinutes(2)
+            };
+            controller.Windows.Add(OvernightMonday());
+            controller.ManagedDiskIds.Add("d1");
+
+            var first = controller.Apply(InsideWindow);                       // clean attempt: busy
+            var later = controller.Apply(InsideWindow.AddMinutes(3));         // past grace: forced
+
+            Assert.True(first.HasBusyDisks);
+            Assert.Equal(0, first.DisksChanged);
+            Assert.False(later.HasBusyDisks);
+            Assert.Equal(1, later.DisksChanged);
+            Assert.True(fake.ListDisks()[0].IsOffline);
+            Assert.Contains("d1", fake.ForcedDisables);
+        }
+
+        [Fact]
+        public void Apply_LeavingWindow_ResetsTheGraceTimer()
+        {
+            var fake = new FakeDiskService(TestDisk.Make("d1", offline: false));
+            fake.BusyDiskIds.Add("d1");
+            var controller = new DriveScheduleController(fake)
+            {
+                Enabled = true,
+                ForceAfter = TimeSpan.FromMinutes(2)
+            };
+            controller.Windows.Add(OvernightMonday());
+            controller.ManagedDiskIds.Add("d1");
+
+            controller.Apply(InsideWindow);                 // starts the timer (busy)
+            controller.Apply(OutsideWindow);                // outside window clears it
+            var back = controller.Apply(InsideWindow.AddMinutes(1)); // fresh timer: still clean/busy
+
+            Assert.True(back.HasBusyDisks);
+            Assert.Equal(0, back.DisksChanged);
+            Assert.Empty(fake.ForcedDisables);
+        }
+
+        [Fact]
         public void Apply_IsSelfCorrecting_AcrossPasses()
         {
             var fake = new FakeDiskService(TestDisk.Make("d1", offline: false));

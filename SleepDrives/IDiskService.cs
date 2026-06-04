@@ -39,13 +39,15 @@ namespace SleepDrives
         IReadOnlyList<DiskInfo> ListDisks();
 
         /// <summary>
-        /// Gracefully take a disk offline: flush and cleanly dismount each of
-        /// its volumes first, and only offline it once they are all quiesced. If
-        /// a volume cannot be locked because it is in use, the disk is left
-        /// online and <see cref="DriveOperationResult.Busy"/> is returned rather
-        /// than forcing it. Identified by stable <paramref name="diskId"/>.
+        /// Take a disk offline: flush and dismount each of its volumes first,
+        /// then offline it. When <paramref name="force"/> is false this is the
+        /// clean path — if a volume can't be locked because it's in use, the
+        /// disk is left online and <see cref="DriveOperationResult.Busy"/> is
+        /// returned. When <paramref name="force"/> is true the volumes are
+        /// dismounted regardless, so the disk is disabled even while a service
+        /// holds it open. Identified by stable <paramref name="diskId"/>.
         /// </summary>
-        DriveOperationResult Disable(string diskId);
+        DriveOperationResult Disable(string diskId, bool force);
 
         /// <summary>Bring a previously disabled disk back online.</summary>
         DriveOperationResult Enable(string diskId);

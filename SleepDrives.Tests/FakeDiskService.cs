@@ -20,28 +20,38 @@ namespace SleepDrives.Tests
             _disks = disks.ToList();
         }
 
-        /// <summary>Disks that report <see cref="DriveOperationResult.Busy"/> on disable.</summary>
+        /// <summary>Disks that report <see cref="DriveOperationResult.Busy"/> on a clean disable.</summary>
         public HashSet<string> BusyDiskIds { get; } = new();
 
         /// <summary>Every (diskId, operation) request issued, in order.</summary>
         public List<(string DiskId, DriveOperation Op)> Calls { get; } = new();
 
+        /// <summary>Disk ids that were ultimately disabled via a forced dismount.</summary>
+        public HashSet<string> ForcedDisables { get; } = new();
+
         public IReadOnlyList<DiskInfo> ListDisks() => _disks.ToList();
 
-        public DriveOperationResult Disable(string diskId)
+        public DriveOperationResult Disable(string diskId, bool force)
         {
             int idx = _disks.FindIndex(d => d.DiskId == diskId);
             if (idx < 0) return DriveOperationResult.NotFound;
             if (!_disks[idx].IsManageable) return DriveOperationResult.Protected;
             if (_disks[idx].IsOffline) return DriveOperationResult.NoChangeNeeded;
 
-            if (BusyDiskIds.Contains(diskId))
+            Calls.Add((diskId, DriveOperation.Disable));
+
+            // A busy disk only disables when forced (mirrors a service holding
+            // a handle that the forced dismount tears down).
+            if (BusyDiskIds.Contains(diskId) && !force)
             {
-                Calls.Add((diskId, DriveOperation.Disable));
                 return DriveOperationResult.Busy; // left online, no state change
             }
 
-            Calls.Add((diskId, DriveOperation.Disable));
+            if (force && BusyDiskIds.Contains(diskId))
+            {
+                ForcedDisables.Add(diskId);
+            }
+
             _disks[idx] = TestDisk.With(_disks[idx], offline: true);
             return DriveOperationResult.Succeeded;
         }

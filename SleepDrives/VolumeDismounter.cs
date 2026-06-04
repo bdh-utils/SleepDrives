@@ -63,11 +63,17 @@ namespace SleepDrives
         }
 
         /// <summary>
-        /// Flush, lock and dismount a single volume. Returns
-        /// <see cref="VolumeResult.Busy"/> (without dismounting) when the volume
-        /// has open handles, so the disk can be left online safely.
+        /// Flush and dismount a single volume.
+        ///
+        /// The volume is always flushed first so cached writes reach the disk.
+        /// We then try to lock it — the clean path, which only succeeds when
+        /// nothing has the volume open. When <paramref name="force"/> is false a
+        /// failed lock returns <see cref="VolumeResult.Busy"/> and the volume is
+        /// left mounted. When <paramref name="force"/> is true the volume is
+        /// dismounted regardless (invalidating any open handles), so a drive
+        /// that is merely held by a background service is still disabled.
         /// </summary>
-        public VolumeResult TryDismountVolume(string volumeGuidPath)
+        public VolumeResult TryDismountVolume(string volumeGuidPath, bool force)
         {
             // CreateFile needs the device path without the trailing backslash.
             string device = volumeGuidPath.TrimEnd('\\');
@@ -89,16 +95,20 @@ namespace SleepDrives
             // Push any cached writes to the platters before we touch the mount.
             FlushFileBuffers(handle);
 
-            // The lock is the safety gate: it fails if anything has the volume
-            // open, which is exactly when we must NOT pull the disk.
-            if (!DeviceIoControl(handle, FSCTL_LOCK_VOLUME, IntPtr.Zero, 0,
-                    IntPtr.Zero, 0, out _, IntPtr.Zero))
+            // Try the clean lock first. It fails if anything has the volume open.
+            bool locked = DeviceIoControl(handle, FSCTL_LOCK_VOLUME, IntPtr.Zero, 0,
+                IntPtr.Zero, 0, out _, IntPtr.Zero);
+
+            if (!locked && !force)
             {
+                // In use and not forcing yet: leave it mounted for a later retry.
                 return VolumeResult.Busy;
             }
 
             try
             {
+                // FSCTL_DISMOUNT_VOLUME dismounts whether or not we hold the lock;
+                // unlocked it forces the dismount, invalidating open handles.
                 if (!DeviceIoControl(handle, FSCTL_DISMOUNT_VOLUME, IntPtr.Zero, 0,
                         IntPtr.Zero, 0, out _, IntPtr.Zero))
                 {
@@ -107,10 +117,13 @@ namespace SleepDrives
             }
             finally
             {
-                // Closing the handle (below, via using) releases the lock; the
-                // volume stays dismounted until something remounts it.
-                DeviceIoControl(handle, FSCTL_UNLOCK_VOLUME, IntPtr.Zero, 0,
-                    IntPtr.Zero, 0, out _, IntPtr.Zero);
+                if (locked)
+                {
+                    // Closing the handle also releases the lock; the volume stays
+                    // dismounted until something remounts it.
+                    DeviceIoControl(handle, FSCTL_UNLOCK_VOLUME, IntPtr.Zero, 0,
+                        IntPtr.Zero, 0, out _, IntPtr.Zero);
+                }
             }
 
             return VolumeResult.Dismounted;
