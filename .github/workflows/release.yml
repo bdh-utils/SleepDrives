@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    branches: [master, main]
+    tags: ['v*']
+  pull_request:
+    branches: [master, main]
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    # net8.0-windows / WPF cannot restore or test on Linux, so run on Windows.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0'
+      - name: Restore
+        run: dotnet restore SleepDrives.sln
+      - name: Test
+        run: dotnet test SleepDrives.sln -c Release --no-restore
+
+  build-windows:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0'
+      - name: Compute version
+        id: ver
+        run: echo "version=$($env:GITHUB_REF_NAME -replace '^v','')" >> $env:GITHUB_OUTPUT
+      - name: Publish single-file exe (self-contained, no loose DLLs)
+        run: >
+          dotnet publish SleepDrives/SleepDrives.csproj -c Release -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+          -p:DebugType=none
+          -p:DebugSymbols=false
+          -p:Version=${{ steps.ver.outputs.version }}
+          -o publish
+      - name: Stage exe for installer
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item publish\SleepDrives.exe dist\SleepDrives.exe
+      - name: Build installer
+        run: |
+          choco install innosetup --no-progress -y
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=${{ steps.ver.outputs.version }} packaging\installer.iss
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: |
+            dist/SleepDrives.exe
+            dist/installer/*.exe
+          if-no-files-found: error
+
+  release:
+    needs: [test, build-windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --generate-notes --title "$GITHUB_REF_NAME" \
+            $(find artifacts -type f \( -name '*.exe' -o -name '*.msi' \))

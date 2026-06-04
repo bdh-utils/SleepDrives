@@ -1,0 +1,45 @@
+<Window x:Class="SleepDrives.AboutWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="About SleepDrives"
+        Height="300" Width="380"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        Background="{StaticResource BrandBg}">
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- App name + version -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal">
+            <TextBlock Text="&#x1F5C4;" FontSize="24" Foreground="{StaticResource BrandAccent}" VerticalAlignment="Center"/>
+            <TextBlock x:Name="AppNameText" FontSize="20" FontWeight="Bold"
+                       Foreground="{StaticResource BrandText}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+        </StackPanel>
+
+        <!-- Tagline -->
+        <TextBlock Grid.Row="1" Margin="0,14,0,0" Foreground="{StaticResource BrandMuted}" FontSize="12"
+                   TextWrapping="Wrap"
+                   Text="Disable selected hard drives on a schedule, automatically."/>
+
+        <!-- Brand line -->
+        <TextBlock Grid.Row="2" Margin="0,14,0,0" Foreground="{StaticResource BrandText}" FontSize="13"
+                   Text="part of the bdh-utils collection"/>
+
+        <!-- GitHub org link -->
+        <TextBlock Grid.Row="3" Margin="0,10,0,0" FontSize="13">
+            <Hyperlink Foreground="{StaticResource BrandAccent}" TextDecorations="None"
+                       Click="OrgLink_Click">https://github.com/bdh-utils</Hyperlink>
+        </TextBlock>
+
+        <!-- Copyright -->
+        <TextBlock x:Name="CopyrightText" Grid.Row="5" Foreground="{StaticResource BrandMuted}" FontSize="11"/>
+    </Grid>
+</Window>
