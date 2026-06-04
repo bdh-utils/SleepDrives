@@ -20,6 +20,19 @@ namespace SleepDrives
         private const string DiskClass = "MSFT_Disk";
 
         private readonly VolumeDismounter _dismounter = new();
+        private readonly IDismountNotifier _notifier;
+
+        public WmiDiskService() : this(new RestartManagerNotifier())
+        {
+        }
+
+        /// <param name="notifier">
+        /// Used on the forced path to ask programs to release the drive first.
+        /// </param>
+        public WmiDiskService(IDismountNotifier notifier)
+        {
+            _notifier = notifier ?? throw new ArgumentNullException(nameof(notifier));
+        }
 
         public IReadOnlyList<DiskInfo> ListDisks()
         {
@@ -81,7 +94,24 @@ namespace SleepDrives
                             return DriveOperationResult.NoChangeNeeded;
                         }
 
-                        var prepared = QuiesceVolumes(GetUInt32(mo, "Number"), force);
+                        var volumes = _dismounter.GetVolumesOnDisk(GetUInt32(mo, "Number"));
+
+                        if (force)
+                        {
+                            // Last resort: ask any programs using the drive to
+                            // close, then give the clean dismount one more go now
+                            // that they may have let go. Only force if it's still
+                            // held.
+                            _notifier.NotifyClosing(volumes);
+                            if (QuiesceVolumes(volumes, force: false) == DriveOperationResult.Succeeded)
+                            {
+                                return Offline(disk)
+                                    ? DriveOperationResult.Succeeded
+                                    : DriveOperationResult.Failed;
+                            }
+                        }
+
+                        var prepared = QuiesceVolumes(volumes, force);
                         if (prepared != DriveOperationResult.Succeeded)
                         {
                             // Busy (clean path only) or Failed: leave the disk
@@ -143,14 +173,14 @@ namespace SleepDrives
         }
 
         /// <summary>
-        /// Flush and dismount every volume on the disk. On the clean path
+        /// Flush and dismount every given volume. On the clean path
         /// (<paramref name="force"/> false) it returns
         /// <see cref="DriveOperationResult.Busy"/> the moment a volume can't be
         /// locked; when forcing, volumes are dismounted regardless.
         /// </summary>
-        private DriveOperationResult QuiesceVolumes(uint diskNumber, bool force)
+        private DriveOperationResult QuiesceVolumes(IReadOnlyList<string> volumes, bool force)
         {
-            foreach (var volume in _dismounter.GetVolumesOnDisk(diskNumber))
+            foreach (var volume in volumes)
             {
                 switch (_dismounter.TryDismountVolume(volume, force))
                 {
