@@ -9,12 +9,13 @@ Point it at the data drives you only use during the day (or only at night), set 
 - **Pick the drives to manage.** SleepDrives lists every physical disk on the machine. Tick the ones you want on a schedule. The Windows **boot and system disks are always protected** and can never be selected, so a schedule can't lock you out of your own PC.
 - **Set when they're disabled.** Add one or more time windows, each with its own days of the week and a start/end time. Overnight windows (e.g. `22:00`–`07:00`) are supported and correctly span midnight.
 - **Automatic enforcement.** While *"Enforce this schedule automatically"* is on, SleepDrives checks the clock every 30 seconds (and again whenever the PC wakes from sleep) and reconciles each managed drive: offline inside a window, online outside it. If you bring a drive back manually during a window, it's re-disabled on the next check.
+- **Graceful, never forced.** Before disabling a drive, SleepDrives runs the *safely-remove* sequence on each of its volumes — flush buffers, lock, then dismount. If a volume can't be locked because something still has files open, the drive is **left enabled** and retried on the next check (with a tray warning), so a disk is never yanked out from under an active read or write.
 - **Lives in the tray.** Closing the window minimises to the system tray so enforcement keeps running. The tray icon turns orange while drives are disabled and grey otherwise.
 - **Starts with Windows (optional).** Because taking a disk offline needs administrator rights, the optional sign-in launch is registered as an elevated **scheduled task**, so it starts silently at logon instead of prompting every time.
 
-"Disabling" a drive takes it **offline** via the Windows storage layer (`MSFT_Disk`) — the same action as *Offline* in Disk Management. It's fully reversible; enabling brings the disk back online (and clears the read-only flag if Windows set one).
+"Disabling" a drive takes it **offline** via the Windows storage layer (`MSFT_Disk`) — the same action as *Offline* in Disk Management. Each volume is flushed, locked and dismounted first (the same steps as *Safely Remove Hardware*), so the filesystem is quiesced before the disk goes offline. It's fully reversible; enabling brings the disk back online (and clears the read-only flag if Windows set one).
 
-> ⚠️ **Heads-up:** taking a disk offline forces its volumes to dismount. Don't schedule a drive you may be reading from or writing to at the time. SleepDrives requires administrator rights and will prompt via UAC on launch.
+> ⚠️ **Heads-up:** SleepDrives won't force a busy drive offline — it waits until the drive is idle. But anything still holding files open *keeps* the drive enabled, so don't rely on a window taking effect while you're actively using that drive. SleepDrives requires administrator rights and will prompt via UAC on launch.
 
 ## Settings
 

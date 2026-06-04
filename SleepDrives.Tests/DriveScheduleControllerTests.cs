@@ -31,6 +31,7 @@ namespace SleepDrives.Tests
 
             Assert.False(result.Enforced);
             Assert.Empty(fake.Calls);
+            Assert.Empty(result.BusyDiskIds);
         }
 
         [Fact]
@@ -46,7 +47,7 @@ namespace SleepDrives.Tests
             Assert.True(result.Enforced);
             Assert.True(result.ShouldDisable);
             Assert.Equal(1, result.DisksChanged);
-            Assert.Equal(("d1", true), fake.Calls[0]);
+            Assert.Equal(("d1", DriveOperation.Disable), fake.Calls[0]);
         }
 
         [Fact]
@@ -61,7 +62,7 @@ namespace SleepDrives.Tests
 
             Assert.True(result.Enforced);
             Assert.False(result.ShouldDisable);
-            Assert.Equal(("d1", false), fake.Calls[0]);
+            Assert.Equal(("d1", DriveOperation.Enable), fake.Calls[0]);
         }
 
         [Fact]
@@ -108,10 +109,47 @@ namespace SleepDrives.Tests
         }
 
         [Fact]
+        public void Apply_BusyDisk_IsLeftOnlineAndReported()
+        {
+            var fake = new FakeDiskService(TestDisk.Make("d1", offline: false));
+            fake.BusyDiskIds.Add("d1"); // a volume is in use
+            var controller = new DriveScheduleController(fake) { Enabled = true };
+            controller.Windows.Add(OvernightMonday());
+            controller.ManagedDiskIds.Add("d1");
+
+            var result = controller.Apply(InsideWindow);
+
+            Assert.Equal(0, result.DisksChanged);
+            Assert.True(result.HasBusyDisks);
+            Assert.Equal(new[] { "d1" }, result.BusyDiskIds);
+            // The disk must still be online — nothing was forced.
+            Assert.False(fake.ListDisks()[0].IsOffline);
+        }
+
+        [Fact]
+        public void Apply_BusyDisk_IsRetriedAndSucceedsOnceFree()
+        {
+            var fake = new FakeDiskService(TestDisk.Make("d1", offline: false));
+            fake.BusyDiskIds.Add("d1");
+            var controller = new DriveScheduleController(fake) { Enabled = true };
+            controller.Windows.Add(OvernightMonday());
+            controller.ManagedDiskIds.Add("d1");
+
+            var first = controller.Apply(InsideWindow);   // busy: left online
+            fake.BusyDiskIds.Clear();                     // user closed the files
+            var second = controller.Apply(InsideWindow);  // now disables
+
+            Assert.True(first.HasBusyDisks);
+            Assert.Equal(0, first.DisksChanged);
+            Assert.False(second.HasBusyDisks);
+            Assert.Equal(1, second.DisksChanged);
+            Assert.True(fake.ListDisks()[0].IsOffline);
+        }
+
+        [Fact]
         public void Apply_IsSelfCorrecting_AcrossPasses()
         {
-            var disk = TestDisk.Make("d1", offline: false);
-            var fake = new FakeDiskService(disk);
+            var fake = new FakeDiskService(TestDisk.Make("d1", offline: false));
             var controller = new DriveScheduleController(fake) { Enabled = true };
             controller.Windows.Add(OvernightMonday());
             controller.ManagedDiskIds.Add("d1");
@@ -125,8 +163,8 @@ namespace SleepDrives.Tests
 
             Assert.Equal(0, second.DisksChanged);
             Assert.Equal(1, third.DisksChanged);
-            Assert.Equal(("d1", true), fake.Calls[0]);
-            Assert.Equal(("d1", false), fake.Calls[1]);
+            Assert.Equal(("d1", DriveOperation.Disable), fake.Calls[0]);
+            Assert.Equal(("d1", DriveOperation.Enable), fake.Calls[1]);
         }
 
         [Fact]
@@ -144,9 +182,9 @@ namespace SleepDrives.Tests
             var result = controller.Apply(InsideWindow);
 
             Assert.Equal(2, result.DisksChanged);
-            Assert.Contains(("d1", true), fake.Calls);
-            Assert.Contains(("d3", true), fake.Calls);
-            Assert.DoesNotContain(("d2", true), fake.Calls);
+            Assert.Contains(("d1", DriveOperation.Disable), fake.Calls);
+            Assert.Contains(("d3", DriveOperation.Disable), fake.Calls);
+            Assert.DoesNotContain(("d2", DriveOperation.Disable), fake.Calls);
         }
     }
 }

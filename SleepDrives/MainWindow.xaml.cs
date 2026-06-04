@@ -48,6 +48,10 @@ namespace SleepDrives
         private bool _reallyExiting;
         private bool _trayTipShown;
 
+        // Disks we've already warned the user are in use, so the tray balloon
+        // fires once per drive rather than every poll.
+        private HashSet<string> _warnedBusy = new(StringComparer.OrdinalIgnoreCase);
+
         public MainWindow()
         {
             InitializeComponent();
@@ -171,7 +175,46 @@ namespace SleepDrives
         {
             var result = _controller.Apply(DateTime.Now);
             UpdateDriveStates();
+            ApplyBusyStates(result.BusyDiskIds);
             UpdateStatusUi(result);
+            WarnIfNewlyBusy(result.BusyDiskIds);
+        }
+
+        private void ApplyBusyStates(IReadOnlyList<string> busyDiskIds)
+        {
+            var busy = new HashSet<string>(busyDiskIds, StringComparer.OrdinalIgnoreCase);
+            foreach (var row in _driveRows)
+            {
+                row.SetBusy(busy.Contains(row.DiskId));
+            }
+        }
+
+        /// <summary>
+        /// Show a one-shot tray warning for any drive that has just become busy,
+        /// so the user knows it was deliberately left online rather than cut.
+        /// </summary>
+        private void WarnIfNewlyBusy(IReadOnlyList<string> busyDiskIds)
+        {
+            var current = new HashSet<string>(busyDiskIds, StringComparer.OrdinalIgnoreCase);
+            var newlyBusy = current.Where(id => !_warnedBusy.Contains(id)).ToList();
+
+            if (newlyBusy.Count > 0 && _trayIcon != null)
+            {
+                var names = string.Join(", ", newlyBusy.Select(NameForDiskId));
+                _trayIcon.ShowBalloonTip(4000, "SleepDrives",
+                    $"Still in use, so left enabled for now: {names}. SleepDrives will retry.",
+                    Forms.ToolTipIcon.Warning);
+            }
+
+            // Reset to the current set so a drive that frees up and later goes
+            // busy again will warn again.
+            _warnedBusy = current;
+        }
+
+        private string NameForDiskId(string diskId)
+        {
+            var row = _driveRows.FirstOrDefault(r => string.Equals(r.DiskId, diskId, StringComparison.OrdinalIgnoreCase));
+            return row?.Title ?? diskId;
         }
 
         private void SetEnforced(bool enabled)
@@ -314,7 +357,9 @@ namespace SleepDrives
             else if (result.ShouldDisable)
             {
                 StatusDot.Fill = (System.Windows.Media.Brush)FindResource("BrandAccent");
-                StatusText.Text = "Active window — managed drives are disabled.";
+                StatusText.Text = result.HasBusyDisks
+                    ? $"Active window — waiting for {result.BusyDiskIds.Count} drive(s) still in use."
+                    : "Active window — managed drives are disabled.";
             }
             else
             {

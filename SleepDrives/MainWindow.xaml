@@ -177,7 +177,7 @@
             <CheckBox x:Name="EnforceCheck" Content="Enforce this schedule automatically"
                       Foreground="{StaticResource BrandText}" FontSize="14" FontWeight="SemiBold"
                       Checked="EnforceCheck_Changed" Unchecked="EnforceCheck_Changed"/>
-            <TextBlock Text="Disabling a drive forces its volumes to dismount — don't schedule a drive you may be reading or writing at the time."
+            <TextBlock Text="Drives are flushed and safely dismounted before being disabled. A drive that's still in use is left enabled and retried, so nothing is cut mid-write."
                        Foreground="{StaticResource BrandMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,6,0,0"/>
         </StackPanel>
 

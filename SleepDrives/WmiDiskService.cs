@@ -7,14 +7,19 @@ namespace SleepDrives
     /// <summary>
     /// The real <see cref="IDiskService"/>, backed by the Windows Storage
     /// Management WMI provider (MSFT_Disk under root\Microsoft\Windows\Storage).
-    /// Disabling a drive maps to <c>Offline()</c> and enabling it to
-    /// <c>Online()</c> — the same actions Disk Management performs. These calls
-    /// require an elevated process, which the app manifest guarantees.
+    ///
+    /// Disabling a drive is done gracefully: each of its volumes is flushed and
+    /// cleanly dismounted (via <see cref="VolumeDismounter"/>) before the disk
+    /// is taken offline with <c>Offline()</c>. If a volume is still in use the
+    /// disk is left online rather than force-cut. Enabling maps to <c>Online()</c>.
+    /// These calls require an elevated process, which the app manifest guarantees.
     /// </summary>
     public sealed class WmiDiskService : IDiskService
     {
         private const string StorageScope = @"\\.\root\Microsoft\Windows\Storage";
         private const string DiskClass = "MSFT_Disk";
+
+        private readonly VolumeDismounter _dismounter = new();
 
         public IReadOnlyList<DiskInfo> ListDisks()
         {
@@ -44,9 +49,9 @@ namespace SleepDrives
             return disks;
         }
 
-        public bool SetOffline(string diskId, bool offline)
+        public DriveOperationResult Disable(string diskId)
         {
-            if (string.IsNullOrEmpty(diskId)) return false;
+            if (string.IsNullOrEmpty(diskId)) return DriveOperationResult.NotFound;
 
             try
             {
@@ -64,23 +69,98 @@ namespace SleepDrives
                             continue;
                         }
 
-                        // Never touch the boot or system disk, defence in depth
-                        // against a stale selection pointing at one.
+                        // Never touch the boot or system disk: defence in depth
+                        // against a stale selection naming one.
                         if (GetBool(mo, "IsBoot") || GetBool(mo, "IsSystem"))
                         {
-                            return false;
+                            return DriveOperationResult.Protected;
                         }
 
-                        return offline ? Offline(disk) : Online(disk);
+                        if (GetBool(mo, "IsOffline"))
+                        {
+                            return DriveOperationResult.NoChangeNeeded;
+                        }
+
+                        var prepared = QuiesceVolumes(GetUInt32(mo, "Number"));
+                        if (prepared != DriveOperationResult.Succeeded)
+                        {
+                            // Busy or Failed: leave the disk online and let the
+                            // caller retry, rather than forcing a dismount.
+                            return prepared;
+                        }
+
+                        return Offline(disk)
+                            ? DriveOperationResult.Succeeded
+                            : DriveOperationResult.Failed;
                     }
                 }
             }
             catch (ManagementException)
             {
-                // Fall through to false: the caller retries on the next pass.
+                return DriveOperationResult.Failed;
             }
 
-            return false;
+            return DriveOperationResult.NotFound;
+        }
+
+        public DriveOperationResult Enable(string diskId)
+        {
+            if (string.IsNullOrEmpty(diskId)) return DriveOperationResult.NotFound;
+
+            try
+            {
+                using var searcher = new ManagementObjectSearcher(
+                    StorageScope, $"SELECT * FROM {DiskClass}");
+                using var results = searcher.Get();
+
+                foreach (ManagementBaseObject mo in results)
+                {
+                    using (mo)
+                    {
+                        if (mo is not ManagementObject disk) continue;
+                        if (!string.Equals(DiskIdOf(mo), diskId, StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
+                        if (!GetBool(mo, "IsOffline"))
+                        {
+                            return DriveOperationResult.NoChangeNeeded;
+                        }
+
+                        return Online(disk)
+                            ? DriveOperationResult.Succeeded
+                            : DriveOperationResult.Failed;
+                    }
+                }
+            }
+            catch (ManagementException)
+            {
+                return DriveOperationResult.Failed;
+            }
+
+            return DriveOperationResult.NotFound;
+        }
+
+        /// <summary>
+        /// Flush and dismount every volume on the disk. Returns
+        /// <see cref="DriveOperationResult.Busy"/> the moment a volume can't be
+        /// locked, so the disk is never offlined while in use.
+        /// </summary>
+        private DriveOperationResult QuiesceVolumes(uint diskNumber)
+        {
+            foreach (var volume in _dismounter.GetVolumesOnDisk(diskNumber))
+            {
+                switch (_dismounter.TryDismountVolume(volume))
+                {
+                    case VolumeDismounter.VolumeResult.Busy:
+                        return DriveOperationResult.Busy;
+                    case VolumeDismounter.VolumeResult.Failed:
+                        return DriveOperationResult.Failed;
+                }
+            }
+
+            return DriveOperationResult.Succeeded;
         }
 
         private static bool Offline(ManagementObject disk)

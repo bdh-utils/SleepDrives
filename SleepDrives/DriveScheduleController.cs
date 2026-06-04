@@ -4,7 +4,15 @@ using System.Collections.Generic;
 namespace SleepDrives
 {
     /// <summary>The outcome of a single <see cref="DriveScheduleController.Apply"/> pass.</summary>
-    public readonly record struct ApplyResult(bool Enforced, bool ShouldDisable, int DisksChanged);
+    public readonly record struct ApplyResult(
+        bool Enforced,
+        bool ShouldDisable,
+        int DisksChanged,
+        IReadOnlyList<string> BusyDiskIds)
+    {
+        /// <summary>Whether any managed disk was left online because it was in use.</summary>
+        public bool HasBusyDisks => BusyDiskIds.Count > 0;
+    }
 
     /// <summary>
     /// The WPF-free engine that drives SleepDrives. Given a schedule and the set
@@ -15,10 +23,13 @@ namespace SleepDrives
     /// Reconciliation reads the disks' live state each pass rather than tracking
     /// it internally, so the controller is self-correcting: a disk the user
     /// brought back online manually is re-disabled on the next pass while the
-    /// window is still active, and stays untouched once it isn't.
+    /// window is still active, and a disk that was too busy to disable is simply
+    /// retried next time.
     /// </summary>
     public sealed class DriveScheduleController
     {
+        private static readonly IReadOnlyList<string> NoBusyDisks = Array.Empty<string>();
+
         private readonly IDiskService _diskService;
 
         public DriveScheduleController(IDiskService diskService)
@@ -47,16 +58,19 @@ namespace SleepDrives
         /// Reconcile every managed disk with the schedule. No-op (and reports
         /// <see cref="ApplyResult.Enforced"/> = false) when <see cref="Enabled"/>
         /// is off. Boot and system disks are skipped even if somehow selected.
+        /// Disks that are in use when they should be disabled are reported in
+        /// <see cref="ApplyResult.BusyDiskIds"/> and left online for retry.
         /// </summary>
         public ApplyResult Apply(DateTime localNow)
         {
             if (!Enabled)
             {
-                return new ApplyResult(Enforced: false, ShouldDisable: false, DisksChanged: 0);
+                return new ApplyResult(Enforced: false, ShouldDisable: false, DisksChanged: 0, NoBusyDisks);
             }
 
             bool shouldDisable = ShouldDisableNow(localNow);
             int changed = 0;
+            List<string>? busy = null;
 
             foreach (var disk in _diskService.ListDisks())
             {
@@ -64,13 +78,25 @@ namespace SleepDrives
                 if (!ManagedDiskIds.Contains(disk.DiskId)) continue;
                 if (disk.IsOffline == shouldDisable) continue;
 
-                if (_diskService.SetOffline(disk.DiskId, shouldDisable))
+                var result = shouldDisable
+                    ? _diskService.Disable(disk.DiskId)
+                    : _diskService.Enable(disk.DiskId);
+
+                if (result == DriveOperationResult.Succeeded)
                 {
                     changed++;
                 }
+                else if (result == DriveOperationResult.Busy)
+                {
+                    (busy ??= new List<string>()).Add(disk.DiskId);
+                }
             }
 
-            return new ApplyResult(Enforced: true, ShouldDisable: shouldDisable, DisksChanged: changed);
+            return new ApplyResult(
+                Enforced: true,
+                ShouldDisable: shouldDisable,
+                DisksChanged: changed,
+                busy is null ? NoBusyDisks : busy);
         }
     }
 }

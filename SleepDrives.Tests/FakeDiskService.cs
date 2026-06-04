@@ -6,8 +6,10 @@ namespace SleepDrives.Tests
 {
     /// <summary>
     /// In-memory <see cref="IDiskService"/> for testing the scheduling engine
-    /// without real hardware. Records every <see cref="SetOffline"/> call and
-    /// updates the disk's reported state so reconciliation can be observed.
+    /// without real hardware. Records every disable/enable request and updates
+    /// the disk's reported state so reconciliation can be observed. Disks named
+    /// in <see cref="BusyDiskIds"/> refuse to disable (simulating an in-use
+    /// volume) without changing state.
     /// </summary>
     public sealed class FakeDiskService : IDiskService
     {
@@ -18,21 +20,49 @@ namespace SleepDrives.Tests
             _disks = disks.ToList();
         }
 
-        /// <summary>Every (diskId, offline) request issued, in order.</summary>
-        public List<(string DiskId, bool Offline)> Calls { get; } = new();
+        /// <summary>Disks that report <see cref="DriveOperationResult.Busy"/> on disable.</summary>
+        public HashSet<string> BusyDiskIds { get; } = new();
+
+        /// <summary>Every (diskId, operation) request issued, in order.</summary>
+        public List<(string DiskId, DriveOperation Op)> Calls { get; } = new();
 
         public IReadOnlyList<DiskInfo> ListDisks() => _disks.ToList();
 
-        public bool SetOffline(string diskId, bool offline)
+        public DriveOperationResult Disable(string diskId)
         {
             int idx = _disks.FindIndex(d => d.DiskId == diskId);
-            if (idx < 0) return false;
-            if (!_disks[idx].IsManageable) return false;
+            if (idx < 0) return DriveOperationResult.NotFound;
+            if (!_disks[idx].IsManageable) return DriveOperationResult.Protected;
+            if (_disks[idx].IsOffline) return DriveOperationResult.NoChangeNeeded;
 
-            Calls.Add((diskId, offline));
-            _disks[idx] = TestDisk.With(_disks[idx], offline);
-            return true;
+            if (BusyDiskIds.Contains(diskId))
+            {
+                Calls.Add((diskId, DriveOperation.Disable));
+                return DriveOperationResult.Busy; // left online, no state change
+            }
+
+            Calls.Add((diskId, DriveOperation.Disable));
+            _disks[idx] = TestDisk.With(_disks[idx], offline: true);
+            return DriveOperationResult.Succeeded;
         }
+
+        public DriveOperationResult Enable(string diskId)
+        {
+            int idx = _disks.FindIndex(d => d.DiskId == diskId);
+            if (idx < 0) return DriveOperationResult.NotFound;
+            if (!_disks[idx].IsOffline) return DriveOperationResult.NoChangeNeeded;
+
+            Calls.Add((diskId, DriveOperation.Enable));
+            _disks[idx] = TestDisk.With(_disks[idx], offline: false);
+            return DriveOperationResult.Succeeded;
+        }
+    }
+
+    /// <summary>Which way a recorded <see cref="FakeDiskService"/> call went.</summary>
+    public enum DriveOperation
+    {
+        Disable,
+        Enable
     }
 
     /// <summary>Factory helpers for building <see cref="DiskInfo"/> fixtures.</summary>

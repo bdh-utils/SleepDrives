@@ -22,6 +22,7 @@ namespace SleepDrives
     {
         private bool _isSelected;
         private bool _isOffline;
+        private bool _isBusy;
 
         public DiskRowViewModel(DiskInfo info)
         {
@@ -60,6 +61,17 @@ namespace SleepDrives
             OnPropertyChanged(nameof(StateText));
         }
 
+        /// <summary>
+        /// Flag the disk as waiting because it's in use (it should be disabled
+        /// but a volume is busy, so SleepDrives is holding off and retrying).
+        /// </summary>
+        public void SetBusy(bool busy)
+        {
+            if (_isBusy == busy) return;
+            _isBusy = busy;
+            OnPropertyChanged(nameof(StateText));
+        }
+
         /// <summary>Reflect the selection without raising <see cref="SelectionChanged"/>.</summary>
         public void SetSelectedSilently(bool selected)
         {
@@ -68,9 +80,15 @@ namespace SleepDrives
             OnPropertyChanged(nameof(IsSelected));
         }
 
-        public string StateText => !IsManageable
-            ? "Protected"
-            : _isOffline ? "Disabled" : "Enabled";
+        public string StateText
+        {
+            get
+            {
+                if (!IsManageable) return "Protected";
+                if (_isBusy) return "In use — waiting";
+                return _isOffline ? "Disabled" : "Enabled";
+            }
+        }
     }
 
     /// <summary>
